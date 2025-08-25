@@ -1,0 +1,12 @@
+def main()=>void {
+    int64 a = square(3) ;
+    int64 b = square(4);
+
+    int64 c = a + b;
+
+    print(c);
+}
+
+def square(int64 a) {
+    return a * a;
+}
