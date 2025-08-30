@@ -1,4 +1,4 @@
-use crate::lexer::{Literal, PrimitiveType, Token, TokenType, TokenValue};
+use crate::lexer::{Literal, Operator, PrimitiveType, Token, TokenType, TokenValue};
 use anyhow::{Context, Result, anyhow, bail};
 use std::iter::Peekable;
 use std::vec::IntoIter;
@@ -57,6 +57,21 @@ pub struct FunctionCall {
 #[derive(Debug, PartialEq)]
 pub enum Expression {
     Literal(Literal),
+    BinaryOperation(Box<BinaryOperation>),
+    UnaryOperation(Box<UnaryOperation>),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct BinaryOperation {
+    lhs: Expression,
+    rhs: Expression,
+    operator: Operator,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct UnaryOperation {
+    operand: Expression,
+    operator: Operator,
 }
 
 pub struct Parser {
@@ -115,11 +130,96 @@ impl Parser {
         }
     }
 
-    fn parse_expression(&mut self) -> Result<Expression> {
-        // TODO: implement expression parsing
-        let literal = self.expect_literal()?;
+    fn expect_operator(&mut self) -> Result<Operator> {
+        if let TokenValue::Operator(operator) = self.expect_token_type(TokenType::Operator)? {
+            Ok(operator)
+        } else {
+            panic!(
+                "This should never happen because if expect_token_type returns an error it gets propagated to expect_operator"
+            )
+        }
+    }
 
-        Ok(Expression::Literal(literal))
+    pub(crate) fn parse_expression(&mut self) -> Result<Expression> {
+        self.parse_expression_inner(0)
+    }
+
+    fn parse_expression_inner(&mut self, min_binding_power: u32) -> Result<Expression> {
+        // TODO allow for unary operators
+        // TODO make this not look awful
+        // TODO this doesn't invalidate expressions with trailing ) i.e. 1 + 2 + 3) = valid
+        let mut lhs = match self.iterator.next() {
+            None => bail!("Could not parse expression. No tokens"),
+            Some(token) => {
+                if token.ty == TokenType::OpenRoundBracket {
+                    let lhs = self.parse_expression_inner(0)?;
+
+                    // Holy rust balls
+                    (self
+                        .iterator
+                        .next()
+                        .ok_or_else(|| {
+                            anyhow!("Could not parse expression. No matching CloseRoundBracket")
+                        })?
+                        .ty
+                        == TokenType::CloseRoundBracket)
+                        .ok_or_else(|| {
+                            anyhow!("Could not parse expression. No matching CloseRoundBracket")
+                        })?;
+
+                    lhs
+                } else if let TokenValue::Literal(literal) = token.value {
+                    Expression::Literal(literal)
+                } else {
+                    bail!(
+                        "Could not parse expression. Wrong token: {:?}, expected OpenRoundBracket or Literal",
+                        token
+                    );
+                }
+            }
+        };
+
+        loop {
+            let operator = match self.iterator.peek() {
+                None => break,
+                Some(token) => {
+                    if token.ty == TokenType::CloseRoundBracket {
+                        break;
+                    } else if let TokenValue::Operator(operator) = token.value.clone() {
+                        operator
+                    } else {
+                        bail!(
+                            "Could not parse expression. Wrong token: {:?}, expected CloseRoundBracket or Operator",
+                            token
+                        );
+                    }
+                }
+            };
+
+            let (lhs_binding_power, rhs_binding_power) = operator.binding_power();
+            if lhs_binding_power < min_binding_power {
+                break;
+            }
+
+            self.iterator.next();
+
+            let rhs = self.parse_expression_inner(rhs_binding_power)?;
+
+            lhs = Expression::BinaryOperation(BinaryOperation { lhs, rhs, operator }.into());
+        }
+
+        Ok(lhs)
+        // let token_type = self
+        //     .iterator
+        //     .peek()
+        //     .with_context(|| "No more tokens, cannot parse expression")?
+        //     .ty;
+
+        // match token_type {
+        //     TokenType::Literal => self.expect_literal()?,
+        //     // TokenType::Identifier => ,
+        //     _ => bail!("Unexpected token while parsing expression \"{:?}\"", token_type),
+        // }
     }
 
     fn parse_statement(&mut self) -> Result<Statement> {
@@ -277,6 +377,277 @@ mod tests {
                 ))]
             })
         );
+    }
+
+    // I love ai driven testing
+    #[test]
+    fn test_parse_expression_single_int() {
+        let mut parser = Parser::new(Lexer::new("42").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::Literal(Literal::Int64(42))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_single_float() {
+        let mut parser = Parser::new(Lexer::new("3.14").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::Literal(Literal::Float64(3.14))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_simple_addition() {
+        let mut parser = Parser::new(Lexer::new("1 + 2").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::BinaryOperation(Box::new(BinaryOperation {
+                lhs: Expression::Literal(Literal::Int64(1)),
+                operator: Operator::Plus,
+                rhs: Expression::Literal(Literal::Int64(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_precedence() {
+        let mut parser = Parser::new(Lexer::new("1 + 2 * 3").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::BinaryOperation(Box::new(BinaryOperation {
+                lhs: Expression::Literal(Literal::Int64(1)),
+                operator: Operator::Plus,
+                rhs: Expression::BinaryOperation(Box::new(BinaryOperation {
+                    lhs: Expression::Literal(Literal::Int64(2)),
+                    operator: Operator::Times,
+                    rhs: Expression::Literal(Literal::Int64(3)),
+                })),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_with_parentheses() {
+        let mut parser = Parser::new(Lexer::new("(1 + 2) * 3").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::BinaryOperation(Box::new(BinaryOperation {
+                lhs: Expression::BinaryOperation(Box::new(BinaryOperation {
+                    lhs: Expression::Literal(Literal::Int64(1)),
+                    operator: Operator::Plus,
+                    rhs: Expression::Literal(Literal::Int64(2)),
+                })),
+                operator: Operator::Times,
+                rhs: Expression::Literal(Literal::Int64(3)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_unary_minus_int() {
+        let mut parser = Parser::new(Lexer::new("-42").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::UnaryOperation(Box::new(UnaryOperation {
+                operator: Operator::Minus,
+                operand: Expression::Literal(Literal::Int64(42)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_unary_minus_float() {
+        let mut parser = Parser::new(Lexer::new("-3.14").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::UnaryOperation(Box::new(UnaryOperation {
+                operator: Operator::Minus,
+                operand: Expression::Literal(Literal::Float64(3.14)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_division() {
+        let mut parser = Parser::new(Lexer::new("10 / 2").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::BinaryOperation(Box::new(BinaryOperation {
+                lhs: Expression::Literal(Literal::Int64(10)),
+                operator: Operator::Divide,
+                rhs: Expression::Literal(Literal::Int64(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_equals() {
+        let mut parser = Parser::new(Lexer::new("1 == 1").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::BinaryOperation(Box::new(BinaryOperation {
+                lhs: Expression::Literal(Literal::Int64(1)),
+                operator: Operator::Equals,
+                rhs: Expression::Literal(Literal::Int64(1)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_no_brackets() {
+        let mut parser = Parser::new(Lexer::new("1 + 2 * 3 + 4 * 5 + 6").lex().unwrap());
+        assert_eq!(
+            parser.parse_expression().unwrap(),
+            Expression::BinaryOperation(Box::new(BinaryOperation {
+                lhs: Expression::BinaryOperation(Box::new(BinaryOperation {
+                    lhs: Expression::BinaryOperation(Box::new(BinaryOperation {
+                        lhs: Expression::Literal(Literal::Int64(1)),
+                        operator: Operator::Plus,
+                        rhs: Expression::BinaryOperation(Box::new(BinaryOperation {
+                            lhs: Expression::Literal(Literal::Int64(2)),
+                            operator: Operator::Times,
+                            rhs: Expression::Literal(Literal::Int64(3)),
+                        })),
+                    })),
+                    operator: Operator::Plus,
+                    rhs: Expression::BinaryOperation(Box::new(BinaryOperation {
+                        lhs: Expression::Literal(Literal::Int64(4)),
+                        operator: Operator::Times,
+                        rhs: Expression::Literal(Literal::Int64(5)),
+                    })),
+                })),
+                operator: Operator::Plus,
+                rhs: Expression::Literal(Literal::Int64(6)),
+            }))
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_empty_input() {
+        let mut parser = Parser::new(Lexer::new("").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_unexpected_operator() {
+        let mut parser = Parser::new(Lexer::new("+").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_missing_operand() {
+        let mut parser = Parser::new(Lexer::new("1 +").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_missing_operator() {
+        let mut parser = Parser::new(Lexer::new("1 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_double_operator() {
+        let mut parser = Parser::new(Lexer::new("1 + + 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_unmatched_open_parenthesis() {
+        let mut parser = Parser::new(Lexer::new("(1 + 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_unmatched_close_parenthesis() {
+        let mut parser = Parser::new(Lexer::new("1 + 2)").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_empty_parentheses() {
+        let mut parser = Parser::new(Lexer::new("()").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_operator_in_parentheses() {
+        let mut parser = Parser::new(Lexer::new("(+)").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_missing_operand_after_operator() {
+        let mut parser = Parser::new(Lexer::new("1 * ").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_missing_operand_before_operator() {
+        let mut parser = Parser::new(Lexer::new("* 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_nested_unmatched_parentheses() {
+        let mut parser = Parser::new(Lexer::new("((1 + 2) * 3").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_extra_close_parenthesis() {
+        let mut parser = Parser::new(Lexer::new("(1 + 2)) * 3").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_invalid_operator_sequence() {
+        let mut parser = Parser::new(Lexer::new("1 * / 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_operator_at_end() {
+        let mut parser = Parser::new(Lexer::new("1 + 2 *").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_operator_at_start() {
+        let mut parser = Parser::new(Lexer::new("* 1 + 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_missing_operator_in_sequence() {
+        let mut parser = Parser::new(Lexer::new("1 2 + 3").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_invalid_token_in_expression() {
+        let mut parser = Parser::new(Lexer::new("1 + abc + 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_complex_missing_operator() {
+        let mut parser = Parser::new(Lexer::new("1 + 2 3 * 4").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_parentheses_without_content() {
+        let mut parser = Parser::new(Lexer::new("1 + () + 2").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
+    }
+
+    #[test]
+    fn test_parse_expression_just_operator() {
+        let mut parser = Parser::new(Lexer::new("+").lex().unwrap());
+        assert!(parser.parse_expression().is_err());
     }
 
     #[test]

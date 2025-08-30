@@ -1,4 +1,5 @@
 #![feature(iter_advance_by)]
+#![feature(bool_to_result)]
 
 mod lexer;
 mod parser;

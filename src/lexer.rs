@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use itertools::Itertools;
 use std::iter::{Enumerate, Peekable};
 use std::str::Chars;
@@ -37,6 +37,13 @@ impl Token {
             value: TokenValue::Literal(literal),
         }
     }
+
+    fn operator(operator: Operator) -> Self {
+        Token {
+            ty: TokenType::Operator,
+            value: TokenValue::Operator(operator),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -45,6 +52,7 @@ pub enum TokenValue {
     Identifier(String),
     PrimitiveType(PrimitiveType),
     Literal(Literal),
+    Operator(Operator),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -57,14 +65,9 @@ pub enum TokenType {
     // TODO custom type
     Literal,
 
-    // Operator
-    Equals,
-    Assign,
-    Returns,
-    Plus,
-    Minus,
-    Times,
-    Divide,
+    Operator,
+    Assign,  // =
+    Returns, // =>
 
     // Punctuation
     Semicolon,
@@ -74,6 +77,26 @@ pub enum TokenType {
     CloseRoundBracket,
     OpenSquareBracket,
     CloseSquareBracket,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum Operator {
+    Equals, // ==
+    Plus,   // +
+    Minus,  // -
+    Times,  // *
+    Divide, // /
+}
+
+impl Operator {
+    pub fn binding_power(&self) -> (u32, u32) {
+        match self {
+            // Two binding powers, one for lhs one for rhs = deterministic binding
+            Operator::Equals => (1, 2),
+            Operator::Plus | Operator::Minus => (2, 3),
+            Operator::Times | Operator::Divide => (5, 6),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -105,7 +128,7 @@ fn characterise_equals_operator(iterator: &mut Peekable<Enumerate<Chars>>) -> To
     match iterator.peek() {
         Some((_, '=')) => {
             iterator.next();
-            Token::just(TokenType::Equals)
+            Token::operator(Operator::Equals)
         }
         Some((_, '>')) => {
             iterator.next();
@@ -218,10 +241,10 @@ impl<'a> Lexer<'a> {
                 '[' => Token::just(TokenType::OpenSquareBracket),
                 ']' => Token::just(TokenType::CloseSquareBracket),
                 ';' => Token::just(TokenType::Semicolon),
-                '+' => Token::just(TokenType::Plus),
-                '-' => Token::just(TokenType::Minus),
-                '*' => Token::just(TokenType::Times),
-                '/' => Token::just(TokenType::Divide),
+                '+' => Token::operator(Operator::Plus),
+                '-' => Token::operator(Operator::Minus),
+                '*' => Token::operator(Operator::Times),
+                '/' => Token::operator(Operator::Divide),
                 '=' => characterise_equals_operator(&mut self.iterator),
                 _ => bail!("Unrecognised token \"{}\"", character),
             };
@@ -229,7 +252,39 @@ impl<'a> Lexer<'a> {
             tokens.push(token);
         }
 
+        Self::validate_brackets(&tokens)?;
+
         Ok(tokens)
+    }
+
+    fn validate_brackets(tokens: &[Token]) -> Result<()> {
+        let mut bracket_stack = Vec::new();
+
+        for token in tokens.iter() {
+            match token.ty {
+                TokenType::OpenRoundBracket => bracket_stack.push(TokenType::CloseRoundBracket),
+                TokenType::OpenCurlyBracket => bracket_stack.push(TokenType::CloseCurlyBracket),
+                TokenType::OpenSquareBracket => bracket_stack.push(TokenType::CloseSquareBracket),
+                TokenType::CloseRoundBracket
+                | TokenType::CloseCurlyBracket
+                | TokenType::CloseSquareBracket => {
+                    let bracket = bracket_stack
+                        .pop()
+                        .ok_or_else(|| anyhow!("Mismatching brackets"))?;
+
+                    if bracket != token.ty {
+                        bail!("Mismatching brackets");
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        if !bracket_stack.is_empty() {
+            bail!("Unclosed brackets");
+        }
+
+        Ok(())
     }
 }
 
@@ -303,7 +358,7 @@ def square(int64 a) {
                 Token::identifier("c"),
                 Token::just(TokenType::Assign),
                 Token::identifier("a"),
-                Token::just(TokenType::Plus),
+                Token::operator(Operator::Plus),
                 Token::identifier("b"),
                 Token::just(TokenType::Semicolon),
                 // print(c);
@@ -322,7 +377,7 @@ def square(int64 a) {
                 Token::just(TokenType::CloseRoundBracket),
                 Token::just(TokenType::OpenCurlyBracket),
                 Token::identifier("a"),
-                Token::just(TokenType::Times),
+                Token::operator(Operator::Times),
                 Token::identifier("a"),
                 Token::just(TokenType::CloseCurlyBracket),
             ]
