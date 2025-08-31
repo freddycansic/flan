@@ -1,5 +1,5 @@
 use crate::lexer::{Literal, Operator, PrimitiveType, Token, TokenType, TokenValue};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -103,7 +103,7 @@ impl Parser {
         }
     }
 
-    fn expect_token_type(&mut self, expected_type: TokenType) -> Result<Expected<TokenValue>> {
+    fn expect_token_type(&mut self, expected_type: TokenType) -> Result<Expected<'_, TokenValue>> {
         let token = self
             .iterator
             .peek()
@@ -121,7 +121,7 @@ impl Parser {
     }
 
     // TODO this could be a macro...
-    fn expect_identifier(&mut self) -> Result<Expected<String>> {
+    fn expect_identifier(&mut self) -> Result<Expected<'_, String>> {
         let Expected { iterator, value } = self.expect_token_type(TokenType::Identifier)?;
 
         if let TokenValue::Identifier(identifier) = value {
@@ -134,7 +134,7 @@ impl Parser {
         panic!("Something very bad has happened")
     }
 
-    fn expect_type(&mut self) -> Result<Expected<PrimitiveType>> {
+    fn expect_type(&mut self) -> Result<Expected<'_, PrimitiveType>> {
         let Expected { iterator, value } = self.expect_token_type(TokenType::PrimitiveType)?;
 
         if let TokenValue::PrimitiveType(primitive_type) = value {
@@ -147,7 +147,7 @@ impl Parser {
         panic!("Something very bad has happened")
     }
 
-    fn expect_literal(&mut self) -> Result<Expected<Literal>> {
+    fn expect_literal(&mut self) -> Result<Expected<'_, Literal>> {
         let Expected { iterator, value } = self.expect_token_type(TokenType::Literal)?;
 
         if let TokenValue::Literal(literal) = value {
@@ -160,7 +160,7 @@ impl Parser {
         panic!("Something very bad has happened")
     }
 
-    fn expect_operator(&mut self) -> Result<Expected<Operator>> {
+    fn expect_operator(&mut self) -> Result<Expected<'_, Operator>> {
         let Expected { iterator, value } = self.expect_token_type(TokenType::Operator)?;
 
         if let TokenValue::Operator(operator) = value {
@@ -173,7 +173,7 @@ impl Parser {
         panic!("Something very bad has happened")
     }
 
-    pub(crate) fn parse_expression(&mut self) -> Result<Expression> {
+    fn parse_expression(&mut self) -> Result<Expression> {
         self.parse_expression_inner(0)
     }
 
@@ -187,18 +187,8 @@ impl Parser {
                 if token.ty == TokenType::OpenRoundBracket {
                     let lhs = self.parse_expression_inner(0)?;
 
-                    // Holy rust balls
-                    (self
-                        .iterator
-                        .next()
-                        .ok_or_else(|| {
-                            anyhow!("Could not parse expression. No matching CloseRoundBracket")
-                        })?
-                        .ty
-                        == TokenType::CloseRoundBracket)
-                        .ok_or_else(|| {
-                            anyhow!("Could not parse expression. No matching CloseRoundBracket")
-                        })?;
+                    self.expect_token_type(TokenType::CloseRoundBracket)?
+                        .consume();
 
                     lhs
                 } else if let TokenValue::Literal(literal) = token.value {
@@ -215,18 +205,8 @@ impl Parser {
         loop {
             let operator = match self.iterator.peek() {
                 None => break,
-                Some(token) => {
-                    if token.ty == TokenType::CloseRoundBracket {
-                        break;
-                    } else if let TokenValue::Operator(operator) = token.value.clone() {
-                        operator
-                    } else {
-                        bail!(
-                            "Could not parse expression. Wrong token: {:?}, expected CloseRoundBracket or Operator",
-                            token
-                        );
-                    }
-                }
+                Some(token) if token.ty == TokenType::CloseRoundBracket => break,
+                Some(_) => self.expect_operator()?.peek().clone(),
             };
 
             let (lhs_binding_power, rhs_binding_power) = operator.binding_power();
@@ -242,17 +222,6 @@ impl Parser {
         }
 
         Ok(lhs)
-        // let token_type = self
-        //     .iterator
-        //     .peek()
-        //     .with_context(|| "No more tokens, cannot parse expression")?
-        //     .ty;
-
-        // match token_type {
-        //     TokenType::Literal => self.expect_literal()?,
-        //     // TokenType::Identifier => ,
-        //     _ => bail!("Unexpected token while parsing expression \"{:?}\"", token_type),
-        // }
     }
 
     fn parse_statement(&mut self) -> Result<Statement> {

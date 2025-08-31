@@ -207,8 +207,8 @@ impl<'a> Lexer<'a> {
                 let num_points = number_string.chars().positions(|char| char == '.').count();
 
                 if num_points > 1
-                    || number_string.chars().next().unwrap() == '.'
-                    || number_string.chars().last().unwrap() == '.'
+                    || number_string.starts_with('.')
+                    || number_string.ends_with('.')
                 {
                     bail!(
                         "Misplaced decimal points in numeric string \"{}\"",
@@ -291,7 +291,6 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
 
     const MINIMAL_PROGRAM: &str = "def main() => void {
 }";
