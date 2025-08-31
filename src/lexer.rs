@@ -291,6 +291,7 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::Parser;
 
     const MINIMAL_PROGRAM: &str = "def main() => void {
 }";
@@ -382,5 +383,29 @@ def square(int64 a) {
                 Token::just(TokenType::CloseCurlyBracket),
             ]
         );
+    }
+
+    #[test]
+    fn test_lexer_unmatched_open_parenthesis() {
+        let lexer = Lexer::new("(1 + 2").lex();
+        assert!(lexer.is_err());
+    }
+
+    #[test]
+    fn test_lexer_unmatched_close_parenthesis() {
+        let lexer = Lexer::new("1 + 2)").lex();
+        assert!(lexer.is_err());
+    }
+
+    #[test]
+    fn test_lexer_nested_unmatched_parentheses() {
+        let lexer = Lexer::new("((1 + 2) * 3").lex();
+        assert!(lexer.is_err());
+    }
+
+    #[test]
+    fn test_lexer_extra_close_parenthesis() {
+        let lexer = Lexer::new("(1 + 2)) * 3").lex();
+        assert!(lexer.is_err());
     }
 }

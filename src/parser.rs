@@ -74,8 +74,26 @@ pub struct UnaryOperation {
     operator: Operator,
 }
 
+type TokenIterator = Peekable<IntoIter<Token>>;
+
 pub struct Parser {
-    iterator: Peekable<IntoIter<Token>>,
+    iterator: TokenIterator,
+}
+
+struct Expected<'a, T> {
+    iterator: &'a mut TokenIterator,
+    value: T,
+}
+
+impl<'a, T> Expected<'a, T> {
+    fn peek(&self) -> &T {
+        &self.value
+    }
+
+    fn consume(self) -> T {
+        self.iterator.next();
+        self.value
+    }
 }
 
 impl Parser {
@@ -85,59 +103,74 @@ impl Parser {
         }
     }
 
-    fn expect_token_type(&mut self, expected_type: TokenType) -> Result<TokenValue> {
+    fn expect_token_type(&mut self, expected_type: TokenType) -> Result<Expected<TokenValue>> {
         let token = self
             .iterator
-            .next()
-            .with_context(|| format!("No more tokens to consume, expected {:?}", expected_type))?;
+            .peek()
+            .with_context(|| format!("No more tokens to consume, expected {:?}", expected_type))?
+            .clone();
 
         if token.ty != expected_type {
             bail!("Unexpected token {:?}, expected {:?}", token, expected_type);
         }
 
-        Ok(token.value)
+        Ok(Expected {
+            iterator: &mut self.iterator,
+            value: token.value,
+        })
     }
 
-    fn expect_identifier(&mut self) -> Result<String> {
-        if let TokenValue::Identifier(identifier) = self.expect_token_type(TokenType::Identifier)? {
-            Ok(identifier)
-        } else {
-            panic!(
-                "This should never happen because if expect_token_type returns an error it gets propagated to expect_identifier"
-            )
+    // TODO this could be a macro...
+    fn expect_identifier(&mut self) -> Result<Expected<String>> {
+        let Expected { iterator, value } = self.expect_token_type(TokenType::Identifier)?;
+
+        if let TokenValue::Identifier(identifier) = value {
+            return Ok(Expected {
+                iterator,
+                value: identifier,
+            });
         }
+
+        panic!("Something very bad has happened")
     }
 
-    fn expect_type(&mut self) -> Result<PrimitiveType> {
-        if let TokenValue::PrimitiveType(primitive_type) =
-            self.expect_token_type(TokenType::PrimitiveType)?
-        {
-            Ok(primitive_type)
-        } else {
-            panic!(
-                "This should never happen because if expect_token_type returns an error it gets propagated to expect_type"
-            )
+    fn expect_type(&mut self) -> Result<Expected<PrimitiveType>> {
+        let Expected { iterator, value } = self.expect_token_type(TokenType::PrimitiveType)?;
+
+        if let TokenValue::PrimitiveType(primitive_type) = value {
+            return Ok(Expected {
+                iterator,
+                value: primitive_type,
+            });
         }
+
+        panic!("Something very bad has happened")
     }
 
-    fn expect_literal(&mut self) -> Result<Literal> {
-        if let TokenValue::Literal(literal) = self.expect_token_type(TokenType::Literal)? {
-            Ok(literal)
-        } else {
-            panic!(
-                "This should never happen because if expect_token_type returns an error it gets propagated to expect_literal"
-            )
+    fn expect_literal(&mut self) -> Result<Expected<Literal>> {
+        let Expected { iterator, value } = self.expect_token_type(TokenType::Literal)?;
+
+        if let TokenValue::Literal(literal) = value {
+            return Ok(Expected {
+                iterator,
+                value: literal,
+            });
         }
+
+        panic!("Something very bad has happened")
     }
 
-    fn expect_operator(&mut self) -> Result<Operator> {
-        if let TokenValue::Operator(operator) = self.expect_token_type(TokenType::Operator)? {
-            Ok(operator)
-        } else {
-            panic!(
-                "This should never happen because if expect_token_type returns an error it gets propagated to expect_operator"
-            )
+    fn expect_operator(&mut self) -> Result<Expected<Operator>> {
+        let Expected { iterator, value } = self.expect_token_type(TokenType::Operator)?;
+
+        if let TokenValue::Operator(operator) = value {
+            return Ok(Expected {
+                iterator,
+                value: operator,
+            });
         }
+
+        panic!("Something very bad has happened")
     }
 
     pub(crate) fn parse_expression(&mut self) -> Result<Expression> {
@@ -224,59 +257,60 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement> {
         // Statement is a declaration
-        if let Some(next_token) = self.iterator.peek()
-            && next_token.ty == TokenType::PrimitiveType
-        {
-            let ty = self.expect_type()?;
-            let variable = self.expect_identifier()?;
-            self.expect_token_type(TokenType::Assign)?;
+        if self.expect_type().is_ok() {
+            let ty = self.expect_type()?.consume();
+            let variable = self.expect_identifier()?.consume();
+            self.expect_token_type(TokenType::Assign)?.consume();
             let expression = self.parse_expression()?;
-            self.expect_token_type(TokenType::Semicolon)?;
+            self.expect_token_type(TokenType::Semicolon)?.consume();
 
-            Ok(Statement::Declaration(Declaration {
+            return Ok(Statement::Declaration(Declaration {
                 ty,
                 variable,
                 expression,
+            }));
+        }
+
+        let identifier = self.expect_identifier()?.consume();
+
+        // Statement is a function call
+        if self.expect_token_type(TokenType::OpenRoundBracket).is_ok() {
+            self.expect_token_type(TokenType::OpenRoundBracket)?
+                .consume();
+            // TODO: parse arguments
+            self.expect_token_type(TokenType::CloseRoundBracket)?
+                .consume();
+            self.expect_token_type(TokenType::Semicolon)?.consume();
+
+            Ok(Statement::FunctionCall(FunctionCall {
+                name: identifier,
+                arguments: vec![],
             }))
-        } else if let Ok(identifier) = self.expect_identifier() {
-            // Statement is a function call
-            if let Some(next_token) = self.iterator.peek()
-                && next_token.ty == TokenType::OpenRoundBracket
-            {
-                self.expect_token_type(TokenType::OpenRoundBracket)?;
-                // TODO: parse arguments
-                self.expect_token_type(TokenType::CloseRoundBracket)?;
-                self.expect_token_type(TokenType::Semicolon)?;
-
-                Ok(Statement::FunctionCall(FunctionCall {
-                    name: identifier,
-                    arguments: vec![],
-                }))
-            // Statement is an assignment
-            } else {
-                self.expect_token_type(TokenType::Assign)?;
-                let expression = self.parse_expression()?;
-                self.expect_token_type(TokenType::Semicolon)?;
-
-                Ok(Statement::Assignment(Assignment {
-                    variable: identifier,
-                    expression,
-                }))
-            }
+        // Statement is an assignment
         } else {
-            Err(anyhow!("Could not parse statement."))
+            self.expect_token_type(TokenType::Assign)?.consume();
+            let expression = self.parse_expression()?;
+            self.expect_token_type(TokenType::Semicolon)?.consume();
+
+            Ok(Statement::Assignment(Assignment {
+                variable: identifier,
+                expression,
+            }))
         }
     }
 
     fn parse_function(&mut self) -> Result<Function> {
-        self.expect_token_type(TokenType::Def)?;
-        let name = self.expect_identifier()?;
-        self.expect_token_type(TokenType::OpenRoundBracket)?;
+        self.expect_token_type(TokenType::Def)?.consume();
+        let name = self.expect_identifier()?.consume();
+        self.expect_token_type(TokenType::OpenRoundBracket)?
+            .consume();
         // TODO parameters
-        self.expect_token_type(TokenType::CloseRoundBracket)?;
-        self.expect_token_type(TokenType::Returns)?;
-        let return_type = self.expect_type()?;
-        self.expect_token_type(TokenType::OpenCurlyBracket)?;
+        self.expect_token_type(TokenType::CloseRoundBracket)?
+            .consume();
+        self.expect_token_type(TokenType::Returns)?.consume();
+        let return_type = self.expect_type()?.consume();
+        self.expect_token_type(TokenType::OpenCurlyBracket)?
+            .consume();
 
         let mut statements = vec![];
         loop {
@@ -555,18 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_expression_unmatched_open_parenthesis() {
-        let mut parser = Parser::new(Lexer::new("(1 + 2").lex().unwrap());
-        assert!(parser.parse_expression().is_err());
-    }
-
-    #[test]
-    fn test_parse_expression_unmatched_close_parenthesis() {
-        let mut parser = Parser::new(Lexer::new("1 + 2)").lex().unwrap());
-        assert!(parser.parse_expression().is_err());
-    }
-
-    #[test]
     fn test_parse_expression_empty_parentheses() {
         let mut parser = Parser::new(Lexer::new("()").lex().unwrap());
         assert!(parser.parse_expression().is_err());
@@ -587,18 +609,6 @@ mod tests {
     #[test]
     fn test_parse_expression_missing_operand_before_operator() {
         let mut parser = Parser::new(Lexer::new("* 2").lex().unwrap());
-        assert!(parser.parse_expression().is_err());
-    }
-
-    #[test]
-    fn test_parse_expression_nested_unmatched_parentheses() {
-        let mut parser = Parser::new(Lexer::new("((1 + 2) * 3").lex().unwrap());
-        assert!(parser.parse_expression().is_err());
-    }
-
-    #[test]
-    fn test_parse_expression_extra_close_parenthesis() {
-        let mut parser = Parser::new(Lexer::new("(1 + 2)) * 3").lex().unwrap());
         assert!(parser.parse_expression().is_err());
     }
 
