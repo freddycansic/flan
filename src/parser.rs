@@ -96,6 +96,20 @@ impl<'a, T> Expected<'a, T> {
     }
 }
 
+macro_rules! expect_token_value {
+    ($func:ident, $token_type:expr, $token_value_variant:ident, $return_type:ty) => {
+        fn $func(&mut self) -> Result<Expected<'_, $return_type>> {
+            let Expected { iterator, value } = self.expect_token_type($token_type)?;
+
+            if let TokenValue::$token_value_variant(value) = value {
+                return Ok(Expected { iterator, value });
+            }
+
+            panic!("Something very bad has happened")
+        }
+    };
+}
+
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self {
@@ -120,58 +134,10 @@ impl Parser {
         })
     }
 
-    // TODO this could be a macro...
-    fn expect_identifier(&mut self) -> Result<Expected<'_, String>> {
-        let Expected { iterator, value } = self.expect_token_type(TokenType::Identifier)?;
-
-        if let TokenValue::Identifier(identifier) = value {
-            return Ok(Expected {
-                iterator,
-                value: identifier,
-            });
-        }
-
-        panic!("Something very bad has happened")
-    }
-
-    fn expect_type(&mut self) -> Result<Expected<'_, PrimitiveType>> {
-        let Expected { iterator, value } = self.expect_token_type(TokenType::PrimitiveType)?;
-
-        if let TokenValue::PrimitiveType(primitive_type) = value {
-            return Ok(Expected {
-                iterator,
-                value: primitive_type,
-            });
-        }
-
-        panic!("Something very bad has happened")
-    }
-
-    fn expect_literal(&mut self) -> Result<Expected<'_, Literal>> {
-        let Expected { iterator, value } = self.expect_token_type(TokenType::Literal)?;
-
-        if let TokenValue::Literal(literal) = value {
-            return Ok(Expected {
-                iterator,
-                value: literal,
-            });
-        }
-
-        panic!("Something very bad has happened")
-    }
-
-    fn expect_operator(&mut self) -> Result<Expected<'_, Operator>> {
-        let Expected { iterator, value } = self.expect_token_type(TokenType::Operator)?;
-
-        if let TokenValue::Operator(operator) = value {
-            return Ok(Expected {
-                iterator,
-                value: operator,
-            });
-        }
-
-        panic!("Something very bad has happened")
-    }
+    expect_token_value!(expect_identifier, TokenType::Identifier, Identifier, String);
+    expect_token_value!(expect_type, TokenType::PrimitiveType, PrimitiveType, PrimitiveType);
+    expect_token_value!(expect_operator, TokenType::Operator, Operator, Operator);
+    expect_token_value!(expect_literal, TokenType::Literal, Literal, Literal);
 
     fn parse_expression(&mut self) -> Result<Expression> {
         self.parse_expression_inner(0)
@@ -186,10 +152,7 @@ impl Parser {
             Some(token) => {
                 if token.ty == TokenType::OpenRoundBracket {
                     let lhs = self.parse_expression_inner(0)?;
-
-                    self.expect_token_type(TokenType::CloseRoundBracket)?
-                        .consume();
-
+                    self.expect_token_type(TokenType::CloseRoundBracket)?.consume();
                     lhs
                 } else if let TokenValue::Literal(literal) = token.value {
                     Expression::Literal(literal)
@@ -244,11 +207,9 @@ impl Parser {
 
         // Statement is a function call
         if self.expect_token_type(TokenType::OpenRoundBracket).is_ok() {
-            self.expect_token_type(TokenType::OpenRoundBracket)?
-                .consume();
+            self.expect_token_type(TokenType::OpenRoundBracket)?.consume();
             // TODO: parse arguments
-            self.expect_token_type(TokenType::CloseRoundBracket)?
-                .consume();
+            self.expect_token_type(TokenType::CloseRoundBracket)?.consume();
             self.expect_token_type(TokenType::Semicolon)?.consume();
 
             Ok(Statement::FunctionCall(FunctionCall {
@@ -271,15 +232,12 @@ impl Parser {
     fn parse_function(&mut self) -> Result<Function> {
         self.expect_token_type(TokenType::Def)?.consume();
         let name = self.expect_identifier()?.consume();
-        self.expect_token_type(TokenType::OpenRoundBracket)?
-            .consume();
+        self.expect_token_type(TokenType::OpenRoundBracket)?.consume();
         // TODO parameters
-        self.expect_token_type(TokenType::CloseRoundBracket)?
-            .consume();
+        self.expect_token_type(TokenType::CloseRoundBracket)?.consume();
         self.expect_token_type(TokenType::Returns)?.consume();
         let return_type = self.expect_type()?.consume();
-        self.expect_token_type(TokenType::OpenCurlyBracket)?
-            .consume();
+        self.expect_token_type(TokenType::OpenCurlyBracket)?.consume();
 
         let mut statements = vec![];
         loop {

@@ -1,0 +1,2 @@
+chain_width = 80
+skip_macro_invocations = ["expect_token_value"]

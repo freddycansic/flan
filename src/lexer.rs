@@ -206,9 +206,7 @@ impl<'a> Lexer<'a> {
 
                 let num_points = number_string.chars().positions(|char| char == '.').count();
 
-                if num_points > 1
-                    || number_string.starts_with('.')
-                    || number_string.ends_with('.')
+                if num_points > 1 || number_string.starts_with('.') || number_string.ends_with('.')
                 {
                     bail!(
                         "Misplaced decimal points in numeric string \"{}\"",
@@ -268,9 +266,8 @@ impl<'a> Lexer<'a> {
                 TokenType::CloseRoundBracket
                 | TokenType::CloseCurlyBracket
                 | TokenType::CloseSquareBracket => {
-                    let bracket = bracket_stack
-                        .pop()
-                        .ok_or_else(|| anyhow!("Mismatching brackets"))?;
+                    let bracket =
+                        bracket_stack.pop().ok_or_else(|| anyhow!("Mismatching brackets"))?;
 
                     if bracket != token.ty {
                         bail!("Mismatching brackets");
